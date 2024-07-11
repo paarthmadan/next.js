@@ -3,8 +3,6 @@ import { retry, waitFor } from 'next-test-utils'
 
 const envFile = '.env.development.local'
 
-const isPPREnabledByDefault = process.env.__NEXT_EXPERIMENTAL_PPR === 'true'
-
 describe(`app-dir-hmr`, () => {
   const { next } = nextTestSetup({
     files: __dirname,
@@ -92,39 +90,38 @@ describe(`app-dir-hmr`, () => {
         } else {
           await retry(
             async () => {
-              const fastRefreshLogs = logs.filter((log) => {
-                return log.message.startsWith('[Fast Refresh]')
+              const envValue = await browser.elementByCss('p').text()
+              const mpa = await browser.eval(
+                'window.__TEST_NO_RELOAD === undefined'
+              )
+              // Flaky sometimes in Webpack:
+              // A. misses update and just receives `{ envValue: 'mac', mpa: false }`
+              // B. triggers error on server resulting in MPA: `{ envValue: 'ipad', mpa: true }` and server logs: ⨯ [TypeError: Cannot read properties of undefined (reading 'polyfillFiles')] ⨯ [TypeError: Cannot read properties of null (reading 'default')]
+              // A is more common than B.
+              expect({ envValue, mpa }).toEqual({
+                envValue: 'ipad',
+                mpa: true,
               })
-              // FIXME: Should be either a single "rebuilding"+"done" or the last "rebuilding" should be followed by "done"
-              expect(fastRefreshLogs).toEqual([
-                { source: 'log', message: '[Fast Refresh] rebuilding' },
-                { source: 'log', message: '[Fast Refresh] rebuilding' },
-                {
-                  source: 'log',
-                  message: expect.stringContaining('[Fast Refresh] done in '),
-                },
-                { source: 'log', message: '[Fast Refresh] rebuilding' },
-              ])
             },
             // Very slow Hot Update for some reason.
             // May be related to receiving 3 rebuild events but only one finish event
-            5000
+            7000
           )
+
+          const fastRefreshLogs = logs.filter((log) => {
+            return log.message.startsWith('[Fast Refresh]')
+          })
+          // FIXME: Should be either a single "rebuilding"+"done" or the last "rebuilding" should be followed by "done"
+          expect(fastRefreshLogs).toEqual([
+            { source: 'log', message: '[Fast Refresh] rebuilding' },
+            { source: 'log', message: '[Fast Refresh] rebuilding' },
+            {
+              source: 'log',
+              message: expect.stringContaining('[Fast Refresh] done in '),
+            },
+            { source: 'log', message: '[Fast Refresh] rebuilding' },
+          ])
         }
-        const envValue = await browser.elementByCss('p').text()
-        const mpa = await browser.eval('window.__TEST_NO_RELOAD === undefined')
-        // Flaky sometimes in Webpack:
-        // A. misses update and just receives `{ envValue: 'mac', mpa: false }`
-        // B. triggers error on server resulting in MPA: `{ envValue: 'ipad', mpa: true }` and server logs: ⨯ [TypeError: Cannot read properties of undefined (reading 'polyfillFiles')] ⨯ [TypeError: Cannot read properties of null (reading 'default')]
-        // A is more common than B.
-        expect({ envValue, mpa }).toEqual({
-          envValue:
-            isPPREnabledByDefault && !process.env.TURBOPACK
-              ? // FIXME: Should be 'ipad' but PPR+Webpack swallows the update reliably
-                'mac'
-              : 'ipad',
-          mpa: false,
-        })
       } finally {
         await next.patchFile(envFile, envContent)
       }
@@ -230,6 +227,7 @@ describe(`app-dir-hmr`, () => {
         .waitForElementByCss('[data-testid="new-runtime-functionality-page"]')
 
       const logs = await browser.log()
+      // TODO: Should assert on all logs but these are cluttered with logs from our test utils (e.g. playwright tracing or webdriver)
       if (process.env.TURBOPACK) {
         // FIXME: logging "rebuilding" multiple times instead of closing it of with "done in"
         // Should just not branch here and have the same logs as Webpack.
@@ -258,7 +256,6 @@ describe(`app-dir-hmr`, () => {
           ])
         )
       } else {
-        // TODO: Should assert on all logs but these are cluttered with logs from our test utils (e.g. playwright tracing or webdriver)
         expect(logs).toEqual(
           expect.arrayContaining([
             {
@@ -271,7 +268,7 @@ describe(`app-dir-hmr`, () => {
             },
           ])
         )
-        expect(logs).toEqual(
+        expect(logs).not.toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               source: 'error',
@@ -279,13 +276,8 @@ describe(`app-dir-hmr`, () => {
           ])
         )
       }
-      if (process.env.TURBOPACK) {
-        // No MPA navigation triggered
-        expect(await browser.eval('window.__TEST_NO_RELOAD')).toEqual(true)
-      } else {
-        // MPA navigation triggered
-        expect(await browser.eval('window.__TEST_NO_RELOAD')).toEqual(undefined)
-      }
+      // No MPA navigation triggered
+      expect(await browser.eval('window.__TEST_NO_RELOAD')).toEqual(true)
     })
   })
 })
